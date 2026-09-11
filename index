@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>LiveATC Player</title>
+  <style>
+    * { 
+      box-sizing: border-box; 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; 
+    }
+    body {
+      background-color: #121212;
+      color: #e0e0e0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .player-card {
+      background: #1e1e1e;
+      border: 1px solid #333333;
+      border-radius: 8px;
+      padding: 12px;
+      width: 420px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }
+    .status-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 14px;
+      color: #aaa;
+      margin-bottom: 10px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      background-color: #555555;
+      border-radius: 50%;
+    }
+    .dot.active { 
+      background-color: #00e676; 
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .btn {
+      background: #2a2a2a;
+      border: 1px solid #444444;
+      border-radius: 6px;
+      padding: 6px 0;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      color: #e0e0e0;
+    }
+    .btn:hover { 
+      background: #383838; 
+    }
+    .btn-play { 
+      color: #66bb6a; 
+      border-color: #2e7d32; 
+    }
+    .btn-stop { 
+      color: #ef5350; 
+      border-color: #c62828; 
+    }
+    
+    .volume-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #bbb;
+      margin-bottom: 10px;
+    }
+    .volume-row input[type="range"] {
+      flex: 1;
+      accent-color: #0d6efd;
+      cursor: pointer;
+    }
+    .vol-val { 
+      width: 36px; 
+      text-align: right; 
+    }
+
+    .meter-container {
+      background: #000;
+      border-radius: 2px;
+      position: relative;
+      width: 100%;
+      height: 60px;
+      overflow: hidden;
+      border: 1px solid #2a2a2a;
+    }
+    canvas { 
+      width: 100%; 
+      height: 100%; 
+      display: block; 
+    }
+
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #888;
+      margin-top: 6px;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="player-card">
+    <div class="status-line">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">stopped</span>
+    </div>
+
+    <div class="controls">
+      <button class="btn btn-play" id="playBtn">&#9654; Play</button>
+      <button class="btn" id="pauseBtn">&#10074;&#10074; Pause</button>
+      <button class="btn btn-stop" id="stopBtn">&#9632; Stop</button>
+    </div>
+
+    <div class="volume-row">
+      <span>Volume</span>
+      <input type="range" id="volumeSlider" min="0" max="100" value="100" />
+      <span class="vol-val" id="volDisplay">100%</span>
+    </div>
+
+    <div class="meter-container">
+      <canvas id="vuMeter"></canvas>
+    </div>
+
+    <div class="footer">
+      <span>Elapsed <span id="elapsedTimer">00:00:00</span></span>
+      <span>UTC <span id="utcClock">00:00:00</span></span>
+    </div>
+  </div>
+
+  <audio id="audio" crossorigin="anonymous" src="https://s1-fmt2.liveatc.net/eidw8"></audio>
+
+  <script>
+    const audio = document.getElementById('audio');
+    const playBtn = document.getElementById('playBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const volumeSlider = document.getElementById('volumeSlider');
+    const volDisplay = document.getElementById('volDisplay');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const elapsedTimer = document.getElementById('elapsedTimer');
+    const utcClock = document.getElementById('utcClock');
+    const canvas = document.getElementById('vuMeter');
+    const ctx = canvas.getContext('2d');
+
+    let audioCtx, analyser, dataArray, source;
+    let secondsElapsed = 0;
+    let timerInterval = null;
+    let currentMeterLevel = 0;
+    let initialSignalDetected = false;
+
+    canvas.width = canvas.clientWidth * window.devicePixelRatio;
+    canvas.height = canvas.clientHeight * window.devicePixelRatio;
+
+    function initAudioContext() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 128;
+        analyser.smoothingTimeConstant = 0.3;
+        source = audioCtx.createMediaElementSource(audio);
+        source.connect(analyser);
+        analyser.connect(audioCtx.destination);
+        dataArray = new Uint8Array(analyser.frequencyBinCount);
+      }
+    }
+
+    function drawMeter() {
+      requestAnimationFrame(drawMeter);
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+
+      ctx.fillStyle = '#aaa';
+      ctx.font = `${10 * window.devicePixelRatio}px monospace`;
+      const dbMarks = [-42, -36, -30, -24, -18, -12, -6, 0];
+      dbMarks.forEach((db, i) => {
+        const x = (i / (dbMarks.length - 1)) * (w - 55) + 15;
+        ctx.fillText(db, x, 12 * window.devicePixelRatio);
+      });
+
+      let targetLevel = 0;
+      if (analyser && !audio.paused) {
+        analyser.getByteFrequencyData(dataArray);
+        
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i] * dataArray[i];
+        }
+        let rms = Math.sqrt(sum / dataArray.length) / 255;
+        
+        targetLevel = Math.min(1.0, Math.pow(rms * 2.2, 1.15));
+
+        if (!initialSignalDetected && targetLevel > 0.02) {
+          initialSignalDetected = true;
+          statusText.textContent = 'playing';
+          startTimer();
+        }
+      }
+
+      if (targetLevel > currentMeterLevel) {
+        currentMeterLevel = targetLevel;
+      } else {
+        currentMeterLevel = Math.max(0, currentMeterLevel - 0.08);
+      }
+
+      const barY1 = 18 * window.devicePixelRatio;
+      const barY2 = 36 * window.devicePixelRatio;
+      const barHeight = 14 * window.devicePixelRatio;
+      const maxBarWidth = w - 55;
+      const barWidth = Math.max(0, maxBarWidth * currentMeterLevel);
+
+      const grad = ctx.createLinearGradient(15, 0, maxBarWidth + 15, 0);
+      grad.addColorStop(0, '#00e676');
+      grad.addColorStop(0.70, '#aeea00');
+      grad.addColorStop(0.85, '#ffea00');
+      grad.addColorStop(0.95, '#ff3d00');
+
+      ctx.fillStyle = grad;
+      ctx.fillRect(15, barY1, barWidth, barHeight);
+      ctx.fillRect(15, barY2, barWidth, barHeight);
+
+      ctx.fillStyle = '#aaa';
+      const dbVal = currentMeterLevel > 0.02 
+        ? ((1 - currentMeterLevel) * -42).toFixed(1) 
+        : '-inf';
+      ctx.fillText(dbVal, w - 38 * window.devicePixelRatio, barY1 + 10);
+      ctx.fillText(dbVal, w - 38 * window.devicePixelRatio, barY2 + 10);
+    }
+
+    drawMeter();
+
+    setInterval(() => {
+      const now = new Date();
+      utcClock.textContent = now.toISOString().substr(11, 8);
+    }, 1000);
+
+    function startTimer() {
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        secondsElapsed++;
+        const hrs = String(Math.floor(secondsElapsed / 3600)).padStart(2, '0');
+        const mins = String(Math.floor((secondsElapsed % 3600) / 60)).padStart(2, '0');
+        const secs = String(secondsElapsed % 60).padStart(2, '0');
+        elapsedTimer.textContent = `${hrs}:${mins}:${secs}`;
+      }, 1000);
+    }
+
+    playBtn.addEventListener('click', () => {
+      initAudioContext();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      audio.play();
+      statusDot.classList.add('active');
+      
+      if (timerInterval) clearInterval(timerInterval);
+      
+      initialSignalDetected = false;
+      statusText.textContent = 'Searching for Frequency...';
+    });
+
+    pauseBtn.addEventListener('click', () => {
+      audio.pause();
+      statusDot.classList.remove('active');
+      statusText.textContent = 'paused';
+      clearInterval(timerInterval);
+    });
+
+    stopBtn.addEventListener('click', () => {
+      audio.pause();
+      audio.currentTime = 0;
+      statusDot.classList.remove('active');
+      statusText.textContent = 'stopped';
+      initialSignalDetected = false;
+      clearInterval(timerInterval);
+      secondsElapsed = 0;
+      elapsedTimer.textContent = '00:00:00';
+    });
+
+    volumeSlider.addEventListener('input', (e) => {
+      const val = e.target.value;
+      audio.volume = val / 100;
+      volDisplay.textContent = `${val}%`;
+    });
+  </script>
+</body>
+</html>
