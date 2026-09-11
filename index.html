@@ -12,11 +12,10 @@
     body {
       background-color: #121212;
       color: #e0e0e0;
-      display: flex;
-      justify-content: center;
-      align-items: center;
       min-height: 100vh;
       margin: 0;
+      overflow: hidden;
+      position: relative;
     }
     .player-card {
       background: #1e1e1e;
@@ -25,6 +24,15 @@
       padding: 12px;
       width: 420px;
       box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      user-select: none;
+      transition: left 0.25s ease-out, top 0.25s ease-out;
+    }
+    .player-card.dragging {
+      transition: none;
     }
     .status-line {
       display: flex;
@@ -33,15 +41,26 @@
       font-size: 14px;
       color: #aaa;
       margin-bottom: 10px;
+      cursor: move;
+      padding: 4px;
+      margin: -4px -4px 10px -4px;
+      border-radius: 4px;
+    }
+    .status-line:hover {
+      background: rgba(255, 255, 255, 0.05);
     }
     .dot {
       width: 8px;
       height: 8px;
       background-color: #555555;
       border-radius: 50%;
+      pointer-events: none;
     }
     .dot.active { 
       background-color: #00e676; 
+    }
+    .status-text {
+      pointer-events: none;
     }
     .controls {
       display: grid;
@@ -120,10 +139,10 @@
 </head>
 <body>
 
-  <div class="player-card">
-    <div class="status-line">
+  <div class="player-card" id="playerCard">
+    <div class="status-line" id="dragHeader">
       <span class="dot" id="statusDot"></span>
-      <span id="statusText">stopped</span>
+      <span class="status-text" id="statusText">stopped</span>
     </div>
 
     <div class="controls">
@@ -151,6 +170,62 @@
   <audio id="audio" crossorigin="anonymous" src="https://s1-fmt2.liveatc.net/eidw8"></audio>
 
   <script>
+    const playerCard = document.getElementById('playerCard');
+    const dragHeader = document.getElementById('dragHeader');
+    let isDragging = false;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    dragHeader.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      playerCard.classList.add('dragging');
+      const rect = playerCard.getBoundingClientRect();
+      
+      playerCard.style.transform = 'none';
+      playerCard.style.left = `${rect.left}px`;
+      playerCard.style.top = `${rect.top}px`;
+      
+      offsetX = e.clientX - rect.left;
+      offsetY = e.clientY - rect.top;
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      playerCard.style.left = `${e.clientX - offsetX}px`;
+      playerCard.style.top = `${e.clientY - offsetY}px`;
+    });
+
+    function snapBackToScreen() {
+      if (!isDragging) return;
+      isDragging = false;
+      playerCard.classList.remove('dragging');
+
+      const rect = playerCard.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+
+      let targetLeft = rect.left;
+      let targetTop = rect.top;
+
+      if (rect.left < 0) {
+        targetLeft = 0;
+      } else if (rect.right > viewportWidth) {
+        targetLeft = viewportWidth - rect.width;
+      }
+
+      if (rect.top < 0) {
+        targetTop = 0;
+      } else if (rect.bottom > viewportHeight) {
+        targetTop = viewportHeight - rect.height;
+      }
+
+      playerCard.style.left = `${targetLeft}px`;
+      playerCard.style.top = `${targetTop}px`;
+    }
+
+    document.addEventListener('mouseup', snapBackToScreen);
+    window.addEventListener('resize', snapBackToScreen);
+
     const audio = document.getElementById('audio');
     const playBtn = document.getElementById('playBtn');
     const pauseBtn = document.getElementById('pauseBtn');
